@@ -1,0 +1,9 @@
+{
+  "expo": {
+    "name": "AI Photo Editor",
+    "slug": "mobile-ai-photo-editor",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light"
+  }
+}
