@@ -1,3 +1,4 @@
+import { File } from 'expo-file-system';
 import { env } from '../config/env';
 
 const API_URL = 'https://api.wavespeed.ai/api/v3';
@@ -54,8 +55,9 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
 
 async function uploadImage(uri: string): Promise<string> {
   const form = new FormData();
-  // React Native przyjmuje plik jako obiekt { uri, name, type }
-  form.append('file', { uri, name: 'photo.jpg', type: 'image/jpeg' } as unknown as Blob);
+  // fetch z Expo nie obsługuje starego zapisu { uri, name, type } –
+  // plik trzeba przekazać jako File z expo-file-system.
+  form.append('file', new File(uri) as unknown as Blob);
 
   const data = await request<{ download_url?: string }>('/media/upload/binary', {
     method: 'POST',
