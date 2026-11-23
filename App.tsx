@@ -8,24 +8,37 @@ import {
   SafeAreaView,
 } from 'react-native-safe-area-context';
 
-import { restyle, Step, WavespeedError } from './src/api/wavespeed';
-import { GenerationStatus } from './src/components/GenerationStatus';
-import { outputSize } from './src/utils/image';
+import { restyle, WavespeedError } from './src/api/wavespeed';
+import { GenerationStatus, Phase } from './src/components/GenerationStatus';
+import { SegmentedControl } from './src/components/SegmentedControl';
+import { downloadResult, saveToGallery } from './src/utils/files';
+import { Aspect, compressPhoto, outputSize } from './src/utils/image';
+
+type Result = { before: string; after: string };
+
+const ASPECTS: { value: Aspect; label: string }[] = [
+  { value: 'auto', label: 'Auto' },
+  { value: '1:1', label: '1:1' },
+  { value: '16:9', label: '16:9' },
+];
 
 export default function App() {
   const [photo, setPhoto] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [error, setError] = useState('');
   const [prompt, setPrompt] = useState('');
-  const [step, setStep] = useState<Step | null>(null);
-  const [resultUrl, setResultUrl] = useState<string | null>(null);
+  const [aspect, setAspect] = useState<Aspect>('auto');
+  const [phase, setPhase] = useState<Phase | null>(null);
+  const [result, setResult] = useState<Result | null>(null);
+  const [showBefore, setShowBefore] = useState(false);
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
 
   // Ref zmienia się od razu, w przeciwieństwie do stanu – chroni przed podwójnym kliknięciem
   const busy = useRef(false);
-  const isGenerating = step !== null;
+  const isGenerating = phase !== null;
 
   function selectPhoto(asset: ImagePicker.ImagePickerAsset) {
     setPhoto(asset);
-    setResultUrl(null);
+    setResult(null);
   }
 
   async function pickImage() {
@@ -85,17 +98,37 @@ export default function App() {
     if (!photo || busy.current) return;
     busy.current = true;
     setError('');
-    setResultUrl(null);
+    setResult(null);
+    setPhase('prepare');
 
     try {
-      const size = outputSize(photo.width, photo.height);
-      const url = await restyle(photo.uri, prompt.trim(), size, setStep);
-      setResultUrl(url);
+      const compressed = await compressPhoto(photo);
+      const size = outputSize(aspect, compressed);
+      const url = await restyle(compressed.uri, prompt.trim(), size, setPhase);
+
+      setPhase('download');
+      const after = await downloadResult(url);
+
+      setResult({ before: compressed.uri, after });
+      setShowBefore(false);
+      setSaveState('idle');
     } catch (e) {
       setError(e instanceof WavespeedError ? e.message : 'Coś poszło nie tak. Spróbuj ponownie.');
     } finally {
-      setStep(null);
+      setPhase(null);
       busy.current = false;
+    }
+  }
+
+  async function saveResult() {
+    if (!result || saveState !== 'idle') return;
+    setSaveState('saving');
+    try {
+      await saveToGallery(result.after);
+      setSaveState('saved');
+    } catch (e) {
+      setSaveState('idle');
+      setError(e instanceof Error ? e.message : 'Nie udało się zapisać zdjęcia.');
     }
   }
 
@@ -157,6 +190,11 @@ export default function App() {
                 multiline
             />
 
+            <Text style={styles.sectionTitle}>Format</Text>
+            <View style={styles.aspectPicker}>
+              <SegmentedControl options={ASPECTS} value={aspect} onChange={setAspect} disabled={isGenerating} />
+            </View>
+
             {/* Przycisk akcji */}
             <TouchableOpacity
                 style={[styles.actionButton, !canGenerate && styles.actionButtonDisabled]}
@@ -170,7 +208,7 @@ export default function App() {
               </Text>
             </TouchableOpacity>
 
-            {step && <GenerationStatus step={step} />}
+            {phase && <GenerationStatus phase={phase} />}
 
             {error ? (
                 <View style={styles.errorBox}>
@@ -179,12 +217,36 @@ export default function App() {
                 </View>
             ) : null}
 
-            {resultUrl && (
+            {result && (
                 <View style={styles.resultSection}>
                   <Text style={styles.sectionTitle}>Wynik</Text>
+                  <SegmentedControl
+                      options={[{ value: 'before', label: 'Przed' }, { value: 'after', label: 'Po' }]}
+                      value={showBefore ? 'before' : 'after'}
+                      onChange={(v) => setShowBefore(v === 'before')}
+                  />
                   <View style={styles.resultCard}>
-                    <Image source={{ uri: resultUrl }} style={styles.previewImage} resizeMode="contain" />
+                    <Image
+                        source={{ uri: showBefore ? result.before : result.after }}
+                        style={styles.previewImage}
+                        resizeMode="contain"
+                    />
                   </View>
+                  <TouchableOpacity
+                      style={[styles.sourceButton, saveState !== 'idle' && styles.savedButton]}
+                      onPress={saveResult}
+                      disabled={saveState !== 'idle'}
+                      activeOpacity={0.8}
+                  >
+                    <Ionicons
+                        name={saveState === 'saved' ? 'checkmark-circle-outline' : 'download-outline'}
+                        size={18}
+                        color={saveState === 'saved' ? '#10b981' : '#e2e8f0'}
+                    />
+                    <Text style={styles.sourceButtonText}>
+                      {saveState === 'saved' ? 'Zapisano w galerii' : saveState === 'saving' ? 'Zapisywanie…' : 'Zapisz w galerii'}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
             )}
 
@@ -295,6 +357,9 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
     marginBottom: 24,
   },
+  aspectPicker: {
+    marginBottom: 24,
+  },
   actionButton: {
     flexDirection: 'row',
     justifyContent: 'center',
@@ -334,8 +399,12 @@ const styles = StyleSheet.create({
   resultSection: {
     marginTop: 28,
   },
+  savedButton: {
+    opacity: 0.8,
+  },
   resultCard: {
     height: 360,
+    marginVertical: 12,
     backgroundColor: '#1e293b',
     borderRadius: 20,
     borderWidth: 1,
