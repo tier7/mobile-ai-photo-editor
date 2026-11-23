@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity, Image, ScrollView } from 'react-native';
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, Image, ScrollView, Alert, Linking } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import * as ImagePicker from 'expo-image-picker';
 import {
@@ -30,6 +30,41 @@ export default function App() {
     }
   }
 
+  // Galeria (systemowy picker) nie wymaga zgody – pytamy tylko o aparat.
+  async function takePhoto() {
+    setError('');
+
+    try {
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      if (!permission.granted) {
+        if (permission.canAskAgain) {
+          setError('Bez dostępu do aparatu nie zrobisz zdjęcia. Możesz wybrać je z galerii.');
+        } else {
+          Alert.alert(
+            'Brak dostępu do aparatu',
+            'Zgoda została wcześniej odrzucona. Włącz dostęp do aparatu w ustawieniach telefonu.',
+            [
+              { text: 'Anuluj', style: 'cancel' },
+              { text: 'Otwórz ustawienia', onPress: () => Linking.openSettings() },
+            ]
+          );
+        }
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
+        quality: 1
+      });
+
+      if (!result.canceled) {
+        setPhoto(result.assets[0]);
+      }
+    } catch {
+      setError('Nie udało się uruchomić aparatu.');
+    }
+  }
+
   return (
       <SafeAreaProvider>
         <SafeAreaView style={styles.safeArea}>
@@ -53,6 +88,16 @@ export default function App() {
                   </View>
               )}
             </TouchableOpacity>
+
+            {/* Źródło zdjęcia */}
+            <View style={styles.sourceRow}>
+              <TouchableOpacity style={styles.sourceButton} onPress={takePhoto} activeOpacity={0.8}>
+                <Text style={styles.sourceButtonText}>📷 Aparat</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.sourceButton} onPress={pickImage} activeOpacity={0.8}>
+                <Text style={styles.sourceButtonText}>🖼️ Galeria</Text>
+              </TouchableOpacity>
+            </View>
 
             {/* Własny prompt */}
             <Text style={styles.sectionTitle}>Opisz, co AI ma zmienić na zdjęciu</Text>
@@ -117,7 +162,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
-    marginBottom: 24,
+    marginBottom: 12,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
@@ -139,6 +184,25 @@ const styles = StyleSheet.create({
     color: '#cbd5e1',
     fontSize: 16,
     fontWeight: '600',
+  },
+  sourceRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 24,
+  },
+  sourceButton: {
+    flex: 1,
+    backgroundColor: '#1e293b',
+    borderWidth: 1,
+    borderColor: '#334155',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  sourceButtonText: {
+    color: '#e2e8f0',
+    fontSize: 15,
+    fontWeight: '700',
   },
   sectionTitle: {
     fontSize: 15,
