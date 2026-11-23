@@ -18,6 +18,22 @@ export async function downloadResult(url: string): Promise<string> {
   return file.uri;
 }
 
+// Skompresowany oryginał leży w cache – do historii robimy trwałą kopię
+export function keepCopy(uri: string): string {
+  const target = newFile('source');
+  new File(uri).copy(target);
+  return target.uri;
+}
+
+export function deleteFile(uri: string) {
+  try {
+    const file = new File(uri);
+    if (file.exists) file.delete();
+  } catch {
+    // plik mógł już zniknąć – nic nie robimy
+  }
+}
+
 export async function saveToGallery(uri: string): Promise<void> {
   // true = prosimy tylko o zapis, bez dostępu do całej galerii
   const permission = await requestPermissionsAsync(true);

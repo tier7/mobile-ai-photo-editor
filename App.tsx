@@ -1,5 +1,5 @@
-import { useRef, useState } from 'react';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity, Image, ScrollView, Alert, Linking } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, Image, ScrollView, Alert, Linking, type ScrollViewInstance } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
@@ -11,7 +11,11 @@ import {
 import { restyle, WavespeedError } from './src/api/wavespeed';
 import { GenerationStatus, Phase } from './src/components/GenerationStatus';
 import { SegmentedControl } from './src/components/SegmentedControl';
-import { downloadResult, saveToGallery } from './src/utils/files';
+import { HistoryStrip } from './src/components/HistoryStrip';
+import { PresetPicker } from './src/components/PresetPicker';
+import { buildPrompt, isPresetReady, Preset } from './src/presets';
+import { addEntry, clearHistory, HistoryEntry, loadHistory } from './src/storage/history';
+import { downloadResult, keepCopy, saveToGallery } from './src/utils/files';
 import { Aspect, compressPhoto, outputSize } from './src/utils/image';
 
 type Result = { before: string; after: string };
@@ -26,6 +30,8 @@ export default function App() {
   const [photo, setPhoto] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [error, setError] = useState('');
   const [prompt, setPrompt] = useState('');
+  const [preset, setPreset] = useState<Preset | null>(null);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [aspect, setAspect] = useState<Aspect>('auto');
   const [phase, setPhase] = useState<Phase | null>(null);
   const [result, setResult] = useState<Result | null>(null);
@@ -34,7 +40,13 @@ export default function App() {
 
   // Ref zmienia się od razu, w przeciwieństwie do stanu – chroni przed podwójnym kliknięciem
   const busy = useRef(false);
+  const scrollRef = useRef<ScrollViewInstance>(null);
+  const resultY = useRef(0);
   const isGenerating = phase !== null;
+
+  useEffect(() => {
+    loadHistory().then(setHistory);
+  }, []);
 
   function selectPhoto(asset: ImagePicker.ImagePickerAsset) {
     setPhoto(asset);
@@ -104,20 +116,53 @@ export default function App() {
     try {
       const compressed = await compressPhoto(photo);
       const size = outputSize(aspect, compressed);
-      const url = await restyle(compressed.uri, prompt.trim(), size, setPhase);
+      const fullPrompt = buildPrompt(preset, prompt);
+      const url = await restyle(compressed.uri, fullPrompt, size, setPhase);
 
       setPhase('download');
       const after = await downloadResult(url);
+      const before = keepCopy(compressed.uri);
 
-      setResult({ before: compressed.uri, after });
-      setShowBefore(false);
-      setSaveState('idle');
+      showResult({ before, after });
+      setHistory(await addEntry({
+        id: String(Date.now()),
+        createdAt: Date.now(),
+        prompt: fullPrompt,
+        style: preset?.name ?? null,
+        before,
+        after,
+      }));
     } catch (e) {
       setError(e instanceof WavespeedError ? e.message : 'Coś poszło nie tak. Spróbuj ponownie.');
     } finally {
       setPhase(null);
       busy.current = false;
     }
+  }
+
+  function showResult(next: Result) {
+    setResult(next);
+    setShowBefore(false);
+    setSaveState('idle');
+  }
+
+  function confirmClearHistory() {
+    Alert.alert(
+      'Wyczyścić historię?',
+      'Usuniemy wszystkie zapisane wyniki z aplikacji. Zdjęcia zapisane w galerii zostaną.',
+      [
+        { text: 'Anuluj', style: 'cancel' },
+        {
+          text: 'Wyczyść',
+          style: 'destructive',
+          onPress: async () => {
+            await clearHistory();
+            setHistory([]);
+            setResult(null);
+          },
+        },
+      ]
+    );
   }
 
   async function saveResult() {
@@ -132,13 +177,15 @@ export default function App() {
     }
   }
 
-  const canGenerate = !!photo && !!prompt.trim() && !isGenerating;
+  const presetLocked = preset !== null && !isPresetReady(preset);
+  const hasPrompt = preset !== null || !!prompt.trim();
+  const canGenerate = !!photo && hasPrompt && !presetLocked && !isGenerating;
 
   return (
       <SafeAreaProvider>
         <SafeAreaView style={styles.safeArea}>
           <StatusBar style="light" />
-          <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+          <ScrollView ref={scrollRef} contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
 
             {/* Nagłówek */}
             <View style={styles.header}>
@@ -178,11 +225,21 @@ export default function App() {
               </TouchableOpacity>
             </View>
 
+            <Text style={styles.sectionTitle}>Styl</Text>
+            <PresetPicker selected={preset} onSelect={setPreset} disabled={isGenerating} />
+            {presetLocked && (
+                <Text style={styles.hintText}>
+                  Ten styl nie ma jeszcze promptu – uzupełnij go w src/presets.ts.
+                </Text>
+            )}
+
             {/* Własny prompt */}
-            <Text style={styles.sectionTitle}>Opisz, co AI ma zmienić na zdjęciu</Text>
+            <Text style={styles.sectionTitle}>
+              {preset ? 'Dopisek do stylu (opcjonalnie)' : 'Opisz, co AI ma zmienić na zdjęciu'}
+            </Text>
             <TextInput
                 style={styles.input}
-                placeholder="np. dodaj cyberpunkowe neony, zmień tło na kosmos..."
+                placeholder={preset ? 'np. dodaj deszcz, nocne światła...' : 'np. dodaj cyberpunkowe neony, zmień tło na kosmos...'}
                 placeholderTextColor="#666"
                 value={prompt}
                 onChangeText={setPrompt}
@@ -218,7 +275,7 @@ export default function App() {
             ) : null}
 
             {result && (
-                <View style={styles.resultSection}>
+                <View style={styles.resultSection} onLayout={(e) => { resultY.current = e.nativeEvent.layout.y; }}>
                   <Text style={styles.sectionTitle}>Wynik</Text>
                   <SegmentedControl
                       options={[{ value: 'before', label: 'Przed' }, { value: 'after', label: 'Po' }]}
@@ -249,6 +306,16 @@ export default function App() {
                   </TouchableOpacity>
                 </View>
             )}
+
+            <HistoryStrip
+                entries={history}
+                onOpen={(entry) => {
+                  showResult({ before: entry.before, after: entry.after });
+                  // wynik jest nad historią – przewijamy do niego
+                  setTimeout(() => scrollRef.current?.scrollTo({ y: resultY.current, animated: true }), 50);
+                }}
+                onClear={confirmClearHistory}
+            />
 
           </ScrollView>
         </SafeAreaView>
@@ -356,6 +423,12 @@ const styles = StyleSheet.create({
     height: 100,
     textAlignVertical: 'top',
     marginBottom: 24,
+  },
+  hintText: {
+    color: '#fbbf24',
+    fontSize: 13,
+    marginTop: -6,
+    marginBottom: 16,
   },
   aspectPicker: {
     marginBottom: 24,
