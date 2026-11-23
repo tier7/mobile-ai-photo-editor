@@ -1,16 +1,32 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { StyleSheet, Text, View, TextInput, TouchableOpacity, Image, ScrollView, Alert, Linking } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import * as ImagePicker from 'expo-image-picker';
+import { Ionicons } from '@expo/vector-icons';
 import {
   SafeAreaProvider,
   SafeAreaView,
 } from 'react-native-safe-area-context';
 
+import { restyle, Step, WavespeedError } from './src/api/wavespeed';
+import { GenerationStatus } from './src/components/GenerationStatus';
+import { outputSize } from './src/utils/image';
+
 export default function App() {
   const [photo, setPhoto] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [error, setError] = useState('');
   const [prompt, setPrompt] = useState('');
+  const [step, setStep] = useState<Step | null>(null);
+  const [resultUrl, setResultUrl] = useState<string | null>(null);
+
+  // Ref zmienia się od razu, w przeciwieństwie do stanu – chroni przed podwójnym kliknięciem
+  const busy = useRef(false);
+  const isGenerating = step !== null;
+
+  function selectPhoto(asset: ImagePicker.ImagePickerAsset) {
+    setPhoto(asset);
+    setResultUrl(null);
+  }
 
   async function pickImage() {
     setError('');
@@ -23,7 +39,7 @@ export default function App() {
       });
 
       if (!result.canceled) {
-        setPhoto(result.assets[0]);
+        selectPhoto(result.assets[0]);
       }
     } catch {
       setError('Nie udało się wczytać zdjęcia.');
@@ -58,32 +74,60 @@ export default function App() {
       });
 
       if (!result.canceled) {
-        setPhoto(result.assets[0]);
+        selectPhoto(result.assets[0]);
       }
     } catch {
       setError('Nie udało się uruchomić aparatu.');
     }
   }
 
+  async function generate() {
+    if (!photo || busy.current) return;
+    busy.current = true;
+    setError('');
+    setResultUrl(null);
+
+    try {
+      const size = outputSize(photo.width, photo.height);
+      const url = await restyle(photo.uri, prompt.trim(), size, setStep);
+      setResultUrl(url);
+    } catch (e) {
+      setError(e instanceof WavespeedError ? e.message : 'Coś poszło nie tak. Spróbuj ponownie.');
+    } finally {
+      setStep(null);
+      busy.current = false;
+    }
+  }
+
+  const canGenerate = !!photo && !!prompt.trim() && !isGenerating;
+
   return (
       <SafeAreaProvider>
         <SafeAreaView style={styles.safeArea}>
           <StatusBar style="light" />
-          <ScrollView contentContainerStyle={styles.container}>
+          <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
 
             {/* Nagłówek */}
             <View style={styles.header}>
-              <Text style={styles.title}>✨ AI Photo Editor</Text>
+              <View style={styles.titleRow}>
+                <Ionicons name="sparkles" size={22} color="#10b981" />
+                <Text style={styles.title}>AI Photo Editor</Text>
+              </View>
               <Text style={styles.subtitle}>Przekształć swoje zdjęcie za pomocą AI</Text>
             </View>
 
             {/* Sekcja wyboru zdjęcia / Podgląd */}
-            <TouchableOpacity style={styles.imageCard} onPress={pickImage} activeOpacity={0.8}>
+            <TouchableOpacity
+                style={styles.imageCard}
+                onPress={pickImage}
+                activeOpacity={0.8}
+                disabled={isGenerating}
+            >
               {photo ? (
                   <Image source={{ uri: photo.uri }} style={styles.previewImage} />
               ) : (
                   <View style={styles.placeholderContainer}>
-                    <Text style={styles.placeholderIcon}>📷</Text>
+                    <Ionicons name="image-outline" size={40} color="#64748b" style={styles.placeholderIcon} />
                     <Text style={styles.placeholderText}>Dotknij, aby wybrać zdjęcie</Text>
                   </View>
               )}
@@ -91,11 +135,13 @@ export default function App() {
 
             {/* Źródło zdjęcia */}
             <View style={styles.sourceRow}>
-              <TouchableOpacity style={styles.sourceButton} onPress={takePhoto} activeOpacity={0.8}>
-                <Text style={styles.sourceButtonText}>📷 Aparat</Text>
+              <TouchableOpacity style={styles.sourceButton} onPress={takePhoto} activeOpacity={0.8} disabled={isGenerating}>
+                <Ionicons name="camera-outline" size={18} color="#e2e8f0" />
+                <Text style={styles.sourceButtonText}>Aparat</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.sourceButton} onPress={pickImage} activeOpacity={0.8}>
-                <Text style={styles.sourceButtonText}>🖼️ Galeria</Text>
+              <TouchableOpacity style={styles.sourceButton} onPress={pickImage} activeOpacity={0.8} disabled={isGenerating}>
+                <Ionicons name="images-outline" size={18} color="#e2e8f0" />
+                <Text style={styles.sourceButtonText}>Galeria</Text>
               </TouchableOpacity>
             </View>
 
@@ -107,20 +153,40 @@ export default function App() {
                 placeholderTextColor="#666"
                 value={prompt}
                 onChangeText={setPrompt}
+                editable={!isGenerating}
                 multiline
             />
 
             {/* Przycisk akcji */}
             <TouchableOpacity
-                style={[styles.actionButton, (!photo || !prompt.trim()) && styles.actionButtonDisabled]}
-                disabled={!photo || !prompt.trim()}
+                style={[styles.actionButton, !canGenerate && styles.actionButtonDisabled]}
+                disabled={!canGenerate}
                 activeOpacity={0.8}
-                onPress={() => alert(`Generowanie z promptem: ${prompt}`)}
+                onPress={generate}
             >
-              <Text style={styles.actionButtonText}>🚀 Generuj obraz AI</Text>
+              <Ionicons name="color-wand-outline" size={20} color="#ffffff" />
+              <Text style={styles.actionButtonText}>
+                {isGenerating ? 'Generowanie…' : 'Generuj obraz AI'}
+              </Text>
             </TouchableOpacity>
 
-            {error ? <Text style={styles.errorText}>{error}</Text> : null}
+            {step && <GenerationStatus step={step} />}
+
+            {error ? (
+                <View style={styles.errorBox}>
+                  <Ionicons name="alert-circle-outline" size={18} color="#f43f5e" />
+                  <Text style={styles.errorText}>{error}</Text>
+                </View>
+            ) : null}
+
+            {resultUrl && (
+                <View style={styles.resultSection}>
+                  <Text style={styles.sectionTitle}>Wynik</Text>
+                  <View style={styles.resultCard}>
+                    <Image source={{ uri: resultUrl }} style={styles.previewImage} resizeMode="contain" />
+                  </View>
+                </View>
+            )}
 
           </ScrollView>
         </SafeAreaView>
@@ -140,6 +206,11 @@ const styles = StyleSheet.create({
   header: {
     marginBottom: 24,
     alignItems: 'center',
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   title: {
     fontSize: 28,
@@ -177,7 +248,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   placeholderIcon: {
-    fontSize: 40,
     marginBottom: 8,
   },
   placeholderText: {
@@ -192,6 +262,9 @@ const styles = StyleSheet.create({
   },
   sourceButton: {
     flex: 1,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
     backgroundColor: '#1e293b',
     borderWidth: 1,
     borderColor: '#334155',
@@ -223,6 +296,9 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   actionButton: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 10,
     backgroundColor: '#10b981', // Soczysta zieleń akcentowa
     paddingVertical: 16,
     borderRadius: 14,
@@ -242,10 +318,28 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: 'bold',
   },
+  errorBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 16,
+  },
   errorText: {
     color: '#f43f5e',
     textAlign: 'center',
-    marginTop: 16,
     fontWeight: '600',
-  }
+    flexShrink: 1,
+  },
+  resultSection: {
+    marginTop: 28,
+  },
+  resultCard: {
+    height: 360,
+    backgroundColor: '#1e293b',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#334155',
+    overflow: 'hidden',
+  },
 });
