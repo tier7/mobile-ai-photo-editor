@@ -2,9 +2,14 @@ import { File } from 'expo-file-system';
 import { fetch } from 'expo/fetch';
 import { Platform } from 'react-native';
 import { env } from '../config/env';
+import type { Aspect } from '../utils/image';
 
 const API_URL = 'https://api.wavespeed.ai/api/v3';
-const MODEL = 'wavespeed-ai/wan-2.2/image-to-image';
+export const MODELS = [
+  { value: 'wavespeed-ai/wan-2.2/image-to-image', label: 'Wan 2.2' },
+  { value: 'google/nano-banana-2.1/edit', label: 'Nano Banana 2.1' },
+] as const;
+export type Model = typeof MODELS[number]['value'];
 
 const STRENGTH = 0.6;
 const POLL_INTERVAL_MS = 2000;
@@ -73,11 +78,14 @@ async function uploadImage(uri: string): Promise<string> {
 }
 
 // Każde zlecenie jest płatne, więc nie ponawiamy go automatycznie.
-async function submitTask(image: string, prompt: string, size: string): Promise<string> {
-  const data = await request<{ id?: string }>(`/${MODEL}`, {
+async function submitTask(image: string, prompt: string, size: string, model: Model, aspect: Aspect): Promise<string> {
+  const body = model === 'google/nano-banana-2.1/edit'
+    ? { images: [image], prompt, ...(aspect !== 'auto' && { aspect_ratio: aspect }), resolution: '1k', output_format: 'jpeg' }
+    : { image, prompt, size, strength: STRENGTH, seed: -1 };
+  const data = await request<{ id?: string }>(`/${model}`, {
     method: 'POST',
     headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ image, prompt, size, strength: STRENGTH, seed: -1 }),
+    body: JSON.stringify(body),
   });
   if (!data.id) throw new WavespeedError('Serwer nie przyjął zlecenia.');
   return data.id;
@@ -130,13 +138,15 @@ export async function restyle(
   imageUri: string,
   prompt: string,
   size: string,
+  model: Model,
+  aspect: Aspect,
   onStep: (step: Step) => void,
 ): Promise<string> {
   onStep('upload');
   const imageUrl = await uploadImage(imageUri);
 
   onStep('submit');
-  const taskId = await submitTask(imageUrl, prompt, size);
+  const taskId = await submitTask(imageUrl, prompt, size, model, aspect);
 
   onStep('processing');
   return waitForResult(taskId);

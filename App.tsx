@@ -8,7 +8,7 @@ import {
   SafeAreaView,
 } from 'react-native-safe-area-context';
 
-import { restyle } from './src/api/wavespeed';
+import { MODELS, Model, restyle } from './src/api/wavespeed';
 import { GenerationStatus, Phase } from './src/components/GenerationStatus';
 import { SegmentedControl } from './src/components/SegmentedControl';
 import { HistoryStrip } from './src/components/HistoryStrip';
@@ -33,6 +33,8 @@ export default function App() {
   const [preset, setPreset] = useState<Preset | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [aspect, setAspect] = useState<Aspect>('auto');
+  const [model, setModel] = useState<Model>(MODELS[0].value);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [phase, setPhase] = useState<Phase | null>(null);
   const [result, setResult] = useState<Result | null>(null);
   const [showBefore, setShowBefore] = useState(false);
@@ -109,6 +111,7 @@ export default function App() {
   async function generate() {
     if (!photo || busy.current) return;
     busy.current = true;
+    setModelMenuOpen(false);
     setError('');
     setResult(null);
     setPhase('prepare');
@@ -117,7 +120,7 @@ export default function App() {
       const compressed = await compressPhoto(photo);
       const size = outputSize(aspect, compressed);
       const fullPrompt = buildPrompt(preset, prompt);
-      const url = await restyle(compressed.uri, fullPrompt, size, setPhase);
+      const url = await restyle(compressed.uri, fullPrompt, size, model, aspect, setPhase);
 
       setPhase('download');
       const after = await downloadResult(url);
@@ -239,9 +242,39 @@ export default function App() {
             )}
 
             {/* Własny prompt */}
-            <Text style={styles.sectionTitle}>
-              {preset ? 'Dopisek do stylu (opcjonalnie)' : 'Opisz, co AI ma zmienić na zdjęciu'}
-            </Text>
+            <View style={styles.promptHeader}>
+              <Text style={[styles.sectionTitle, styles.promptTitle]}>
+                {preset ? 'Dopisek do stylu (opcjonalnie)' : 'Opisz, co AI ma zmienić na zdjęciu'}
+              </Text>
+              <View>
+                <TouchableOpacity
+                    style={[styles.sourceButton, styles.modelButton]}
+                    onPress={() => setModelMenuOpen(!modelMenuOpen)}
+                    disabled={isGenerating}
+                    accessibilityRole="button"
+                    accessibilityLabel="Wybierz model AI"
+                    accessibilityState={{ expanded: modelMenuOpen, disabled: isGenerating }}
+                >
+                  <Text style={styles.sourceButtonText}>{MODELS.find((option) => option.value === model)?.label}</Text>
+                  <Ionicons name={modelMenuOpen ? 'chevron-up' : 'chevron-down'} size={16} color="#94a3b8" />
+                </TouchableOpacity>
+                {modelMenuOpen && (
+                    <View style={styles.modelMenu}>
+                      {MODELS.map((option) => (
+                          <TouchableOpacity
+                              key={option.value}
+                              style={[styles.modelOption, model === option.value && styles.modelOptionSelected]}
+                              onPress={() => { setModel(option.value); setModelMenuOpen(false); }}
+                              accessibilityRole="button"
+                              accessibilityState={{ selected: model === option.value }}
+                          >
+                            <Text style={styles.sourceButtonText}>{option.label}</Text>
+                          </TouchableOpacity>
+                      ))}
+                    </View>
+                )}
+              </View>
+            </View>
             <TextInput
                 style={styles.input}
                 placeholder={preset ? 'np. dodaj deszcz, nocne światła...' : 'np. dodaj cyberpunkowe neony, zmień tło na kosmos...'}
@@ -428,6 +461,41 @@ const styles = StyleSheet.create({
     height: 100,
     textAlignVertical: 'top',
     marginBottom: 24,
+  },
+  promptHeader: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+    zIndex: 1,
+  },
+  promptTitle: {
+    marginBottom: 0,
+  },
+  modelButton: {
+    flex: 0,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  modelMenu: {
+    position: 'absolute',
+    top: '100%',
+    right: 0,
+    minWidth: 190,
+    marginTop: 4,
+    backgroundColor: '#1e293b',
+    borderColor: '#334155',
+    borderWidth: 1,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  modelOption: {
+    padding: 12,
+  },
+  modelOptionSelected: {
+    backgroundColor: '#334155',
   },
   hintText: {
     color: '#fbbf24',
