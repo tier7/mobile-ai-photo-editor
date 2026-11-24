@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity, Image, ScrollView, Alert, Linking, type ScrollViewInstance } from 'react-native';
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, Image, ScrollView, Alert, Linking, Platform, type ScrollViewInstance } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
@@ -8,7 +8,7 @@ import {
   SafeAreaView,
 } from 'react-native-safe-area-context';
 
-import { restyle, WavespeedError } from './src/api/wavespeed';
+import { restyle } from './src/api/wavespeed';
 import { GenerationStatus, Phase } from './src/components/GenerationStatus';
 import { SegmentedControl } from './src/components/SegmentedControl';
 import { HistoryStrip } from './src/components/HistoryStrip';
@@ -121,7 +121,7 @@ export default function App() {
 
       setPhase('download');
       const after = await downloadResult(url);
-      const before = keepCopy(compressed.uri);
+      const before = await keepCopy(compressed.uri);
 
       showResult({ before, after });
       setHistory(await addEntry({
@@ -133,7 +133,7 @@ export default function App() {
         after,
       }));
     } catch (e) {
-      setError(e instanceof WavespeedError ? e.message : 'Coś poszło nie tak. Spróbuj ponownie.');
+      setError(e instanceof Error ? e.message : 'Coś poszło nie tak. Spróbuj ponownie.');
     } finally {
       setPhase(null);
       busy.current = false;
@@ -147,6 +147,15 @@ export default function App() {
   }
 
   function confirmClearHistory() {
+    const onClear = async () => {
+      await clearHistory();
+      setHistory([]);
+      setResult(null);
+    };
+    if (Platform.OS === 'web') {
+      if (window.confirm('Wyczyścić historię?')) void onClear();
+      return;
+    }
     Alert.alert(
       'Wyczyścić historię?',
       'Usuniemy wszystkie zapisane wyniki z aplikacji. Zdjęcia zapisane w galerii zostaną.',
@@ -155,11 +164,7 @@ export default function App() {
         {
           text: 'Wyczyść',
           style: 'destructive',
-          onPress: async () => {
-            await clearHistory();
-            setHistory([]);
-            setResult(null);
-          },
+          onPress: onClear,
         },
       ]
     );
